@@ -2,8 +2,8 @@
 when shapeless meets http4s
 
 #
-Stork let's you define services in a way that let's you both define and call them in a type-safe way.
-The correctness of request parameters is checked at compile-time and the implementation is IDE-friendly (IntelliJ will suggest the parameter types you need to pass to a request).
+Stork allows you to create services in a way that let's you do both: define and call them in a type-safe way.
+The correctness of service and request types is checked at compile-time and the implementation is IDE-friendly (IntelliJ will suggest the parameter types you need to pass to a request).
 
 ```scala
 val endpoint = get(path("add") :: path[Int] :: path("and") :: param[Int]("this"))
