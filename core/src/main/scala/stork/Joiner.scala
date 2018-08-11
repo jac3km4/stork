@@ -4,6 +4,7 @@ import cats.effect.IO
 import cats.implicits._
 import org.http4s.Request
 import shapeless.{::, HList, HNil}
+import stork.schema.Schema
 
 trait Joiner[T1, T2] {
   type Out
@@ -22,6 +23,8 @@ trait LowPrioJoiner {
 
         override def extract(request: Request[IO], remainingPath: List[String]): Option[ExtractState[IO, A]] =
           t1.extract(request, remainingPath).flatMap(st => t2.extract(request, st.remainingParams))
+
+        override def schema: Schema = t1.schema ++ t2.schema
       }
     }
 }
@@ -41,6 +44,8 @@ object Joiner extends LowPrioJoiner {
 
         override def extract(request: Request[IO], remainingPath: List[String]): Option[ExtractState[IO, A :: HNil]] =
           t1.extract(request, remainingPath).flatMap(st => t2.extract(request, st.remainingParams))
+
+        override def schema: Schema = t1.schema ++ t2.schema
       }
     }
 
@@ -57,6 +62,8 @@ object Joiner extends LowPrioJoiner {
             st1 <- t1.extract(request, remainingPath)
             st2 <- t2.extract(request, st1.remainingParams)
           } yield ExtractState((st1.value, st2.value).mapN { (a, b) => a.head :: b }, st2.remainingParams)
+
+        override def schema: Schema = t1.schema ++ t2.schema
       }
     }
 
