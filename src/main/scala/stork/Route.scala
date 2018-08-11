@@ -1,7 +1,8 @@
 package stork
 
-import cats.Applicative
-import org.http4s.{HttpService, Method, Request, Response}
+import cats.implicits._
+import cats.{Applicative, Monad}
+import org.http4s.{EntityDecoder, EntityEncoder, HeaderKey, HttpService, Method, QueryParamDecoder, QueryParamEncoder, QueryParameterValue, Request, Response, Uri}
 import shapeless.ops.function.{FnFromProduct, FnToProduct}
 import shapeless.{::, HList, HNil}
 
@@ -17,67 +18,87 @@ private[stork] trait Route[F[_], A <: HList] {
 
   final def seal(method: Method)(implicit F: Applicative[F]): Endpoint[F, A] = Endpoint {
     new Route[F, A] {
-      override def apply(request: Request[F], value: A): Request[F] =
+      override def apply(request: Request[F], value: A): F[Request[F]] =
         self.apply(request.withMethod(method), value)
 
-      override def extract(request: Request[F], remainingPath: List[String]): Option[ExtractState[A]] =
+      override def extract(request: Request[F], remainingPath: List[String]): Option[ExtractState[F, A]] =
         if (request.method == method) self.extract(request, remainingPath)
         else None
     }
   }
 
-  def apply(request: Request[F], value: A): Request[F]
-  def extract(request: Request[F], remainingPath: List[String]): Option[ExtractState[A]]
+  def apply(request: Request[F], value: A): F[Request[F]]
+
+  def extract(request: Request[F], remainingPath: List[String]): Option[ExtractState[F, A]]
 }
 
 final case class Endpoint[F[_], In <: HList](route: Route[F, In]) extends AnyVal {
   def request[FN](base: String)
-                (implicit fp: FnFromProduct.Aux[In => Request[F], FN]): FN =
-    fp.apply(route.apply(Request[F](), _))
+                 (implicit fp: FnFromProduct.Aux[In => F[Request[F]], FN]): FN =
+    fp.apply(route.apply(Request[F](uri = Uri.unsafeFromString(base)), _))
 
-  def service[FN](f: FN)(implicit ap: Applicative[F],
+  def service[FN](f: FN)(implicit F: Monad[F],
                          fp: FnToProduct.Aux[FN, In => F[Response[F]]]): HttpService[F] = {
-    val fn: Request[F] => Option[F[Response[F]]] = { req: Request[F] =>
+    val fn: Request[F] => Option[F[Response[F]]] = { req =>
       route.extract(req, req.uri.path.stripPrefix("/").split('/').toList).map { state =>
-        fp(f)(state.value)
+        state.value.flatMap(fp(f))
       }
     }
     HttpService(Function.unlift(fn))
   }
 }
 
-final case class PathSegment[F[_]: Applicative](value: String) extends Route[F, HNil] {
-  override def apply(request: Request[F], hnil: HNil): Request[F] =
-    request.withUri(request.uri / value)
+final case class PathSegment[F[_]](value: String)(implicit F: Applicative[F]) extends Route[F, HNil] {
+  override def apply(request: Request[F], hnil: HNil): F[Request[F]] =
+    F.pure(request.withUri(request.uri / value))
 
-  override def extract(request: Request[F], remainingPath: List[String]): Option[ExtractState[HNil]] =
+  override def extract(request: Request[F], remainingPath: List[String]): Option[ExtractState[F, HNil]] =
     remainingPath match {
-      case `value` ::/ tail => Some(ExtractState(HNil, tail))
+      case `value` ::/ tail => Some(ExtractState(F.pure(HNil), tail))
       case _ => None
     }
 }
 
-final case class PathItem[F[_]: Applicative, A: URLDecoder]() extends Route[F, A :: HNil] {
-  override def apply(request: Request[F], value: A :: HNil): Request[F] = {
-    request.withUri(request.uri / value.head.toString) // FIXME
-  }
-  override def extract(request: Request[F], remainingPath: List[String]): Option[ExtractState[A :: HNil]] =
+final case class PathItem[F[_], A: URLFormat](implicit F: Applicative[F]) extends Route[F, A :: HNil] {
+  override def apply(request: Request[F], value: A :: HNil): F[Request[F]] =
+    F.pure(request.withUri(request.uri / URLFormat[A].encode(value.head)))
+
+  override def extract(request: Request[F], remainingPath: List[String]): Option[ExtractState[F, A :: HNil]] =
     remainingPath match {
-      case head ::/ tail => Some(ExtractState(implicitly[URLDecoder[A]].decode(head):: HNil, tail))
+      case head ::/ tail =>
+        URLFormat[A].decode(head).map(v => ExtractState(F.pure(v :: HNil), tail))
       case _ => None
     }
 }
 
-final case class QueryParam[F[_]: Applicative, A: QueryDecoder](name: String) extends Route[F, A :: HNil] {
-  override def apply(request: Request[F], value: A :: HNil): Request[F] = {
-    request.withUri(request.uri.withQueryParam(name, value.head.toString)) // FIXME
-  }
+final case class QueryParam[F[_], A: QueryParamDecoder : QueryParamEncoder](name: String)(implicit F: Applicative[F]) extends Route[F, A :: HNil] {
+  override def apply(request: Request[F], value: A :: HNil): F[Request[F]] =
+    F.pure(request.withUri(request.uri.withQueryParam(name, QueryParamEncoder[A].encode(value.head).value)))
 
-  override def extract(request: Request[F], remainingPath: List[String]): Option[ExtractState[A :: HNil]] = {
-    request.params.get(name)
-      .map(implicitly[QueryDecoder[A]].decode)
-      .map(v => ExtractState(v :: HNil, remainingPath))
+  override def extract(request: Request[F], remainingPath: List[String]): Option[ExtractState[F, A :: HNil]] = for {
+    value <- request.params.get(name)
+    decoded <- QueryParamDecoder[A].decode(QueryParameterValue(value)).toOption
+  } yield ExtractState(F.pure(decoded :: HNil), remainingPath)
+}
+
+final case class Header[F[_], H <: HeaderKey.Extractable](key: H)(implicit F: Applicative[F]) extends Route[F, H#HeaderT :: HNil] {
+  override def apply(request: Request[F], value: H#HeaderT :: HNil): F[Request[F]] =
+    F.pure(request.putHeaders(value.head))
+
+  override def extract(request: Request[F], remainingPath: List[String]): Option[ExtractState[F, H#HeaderT :: HNil]] =
+    request.headers.get(key).map(v => ExtractState(F.pure(v :: HNil), remainingPath))
+}
+
+final case class Body[F[_], A](implicit F: Monad[F],
+                               encoder: EntityEncoder[F, A],
+                               decoder: EntityDecoder[F, A]) extends Route[F, A :: HNil] {
+  override def apply(request: Request[F], value: A :: HNil): F[Request[F]] =
+    request.withBody(value.head)
+
+  override def extract(request: Request[F], remainingPath: List[String]): Option[ExtractState[F, A :: HNil]] = {
+    val body = request.as[A]
+    Some(ExtractState(body.map(_ :: HNil), remainingPath))
   }
 }
 
-final case class ExtractState[A](value: A, remainingParams: List[String])
+final case class ExtractState[F[_], A](value: F[A], remainingParams: List[String])

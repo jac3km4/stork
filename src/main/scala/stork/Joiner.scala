@@ -1,6 +1,7 @@
 package stork
 
 import cats.effect.IO
+import cats.implicits._
 import org.http4s.Request
 import shapeless.{::, HList, HNil}
 
@@ -16,11 +17,11 @@ trait LowPrioJoiner {
       override type Out = Route[IO, A]
 
       override def join(t1: Route[IO, HNil], t2: Route[IO, A]): Out = new Route[IO, A] {
-        override def apply(request: Request[IO], value: A): Request[IO] =
-          t2.apply(t1.apply(request, HNil), value)
+        override def apply(request: Request[IO], value: A): IO[Request[IO]] =
+          t1.apply(request, HNil).flatMap(t2.apply(_, value))
 
-        override def extract(request: Request[IO], remainingPath: List[String]): Option[ExtractState[A]] =
-          t1.extract(request, remainingPath).flatMap { st => t2.extract(request, st.remainingParams) }
+        override def extract(request: Request[IO], remainingPath: List[String]): Option[ExtractState[IO, A]] =
+          t1.extract(request, remainingPath).flatMap(st => t2.extract(request, st.remainingParams))
       }
     }
 }
@@ -35,11 +36,11 @@ object Joiner extends LowPrioJoiner {
       override type Out = Route[IO, A :: HNil]
 
       override def join(t1: Route[IO, HNil], t2: Route[IO, A :: HNil]): Out = new Route[IO, A :: HNil] {
-        override def apply(request: Request[IO], value: A :: HNil): Request[IO] =
-          t2.apply(t1.apply(request, HNil), value)
+        override def apply(request: Request[IO], value: A :: HNil): IO[Request[IO]] =
+          t1.apply(request, HNil).flatMap(t2.apply(_, value))
 
-        override def extract(request: Request[IO], remainingPath: List[String]): Option[ExtractState[A :: HNil]] =
-          t1.extract(request, remainingPath).flatMap { st => t2.extract(request, st.remainingParams) }
+        override def extract(request: Request[IO], remainingPath: List[String]): Option[ExtractState[IO, A :: HNil]] =
+          t1.extract(request, remainingPath).flatMap(st => t2.extract(request, st.remainingParams))
       }
     }
 
@@ -48,14 +49,14 @@ object Joiner extends LowPrioJoiner {
       override type Out = Route[IO, B :: A]
 
       override def join(t1: Route[IO, B :: HNil], t2: Route[IO, A]): Out = new Route[IO, B :: A] {
-        override def apply(request: Request[IO], value: B :: A): Request[IO] =
-          t2.apply(t1.apply(request, value.head :: HNil), value.tail)
+        override def apply(request: Request[IO], value: B :: A): IO[Request[IO]] =
+          t1.apply(request, value.head :: HNil).flatMap(t2.apply(_, value.tail))
 
-        override def extract(request: Request[IO], remainingPath: List[String]): Option[ExtractState[B :: A]] =
+        override def extract(request: Request[IO], remainingPath: List[String]): Option[ExtractState[IO, B :: A]] =
           for {
             st1 <- t1.extract(request, remainingPath)
             st2 <- t2.extract(request, st1.remainingParams)
-          } yield ExtractState(st1.value.head :: st2.value, st2.remainingParams)
+          } yield ExtractState((st1.value, st2.value).mapN { (a, b) => a.head :: b }, st2.remainingParams)
       }
     }
 
