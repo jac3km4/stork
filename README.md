@@ -13,5 +13,5 @@ val service = endpoint.service { (a: Int, b: Int) => Ok((a + b).toString) }
 val request = endpoint.request("localhost").apply(1, 2)
 // would translate to GET localhost/add/1/and?this=2
 
-println(service.run(request).value)
+println(OptionT.liftF(request).flatMap(service.run).value.unsafeRunSync())
 ```
