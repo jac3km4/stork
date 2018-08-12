@@ -3,15 +3,22 @@ when shapeless meets http4s
 
 #
 Stork allows you to create services in a way that let's you do both: define and call them in a type-safe way.
-The correctness of service and request types is checked at compile-time and the implementation is IDE-friendly (IntelliJ will suggest the parameter types you need to pass to a request).
+The correctness of service and request types is checked at compile-time and the implementation is IDE-friendly (IntelliJ will suggest the parameter types you need to pass to a request). Stork also allows you to generate detailed swagger definitions for your endpoints.
 
+#
+Example [from here](https://github.com/jac3km4/stork/blob/master/example/src/main/scala/stork/Main.scala)
 ```scala
-val endpoint = get(path("add") :: path[Int] :: path("and") :: param[Int]("this"))
+  final case class User(firstName: String, lastName: String, age: Int)
 
-val service = endpoint.service { (a: Int, b: Int) => Ok((a + b).toString) }
+  implicit val encoder: EntityEncoder[IO, User] = jsonEncoderOf[IO, User]
+  implicit val decoder: EntityDecoder[IO, User] = jsonOf[IO, User]
 
-val request = endpoint.request("localhost").apply(1, 2)
-// would translate to GET localhost/add/1/and?this=2
+  val endpoint = put(path("users") :: path[UUID] :: body[User]).as[User]
 
-println(OptionT.liftF(request).flatMap(service.run).value.unsafeRunSync())
+  val service: HttpService[IO] = endpoint.service { (a: UUID, b: User) => IO.pure(b) }
+
+  val request: IO[Option[User]] = endpoint.request(service).apply(UUID.randomUUID(), User("John", "Cena", 45))
+
+  println(request.unsafeRunSync()) // Some(User(John,Cena,45))
+  println(Swagger.generate(endpoint))
 ```
