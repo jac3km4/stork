@@ -8,7 +8,8 @@ lazy val core = project
     commonSettings,
     libraryDependencies ++= Seq(
       "com.chuusai" %% "shapeless" % "2.3.3",
-      "org.http4s" %% "http4s-dsl" % http4sVersion
+      "org.http4s" %% "http4s-dsl" % http4sVersion,
+      "org.http4s" %% "http4s-blaze-client" % http4sVersion
     )
   )
 
@@ -20,6 +21,16 @@ lazy val swagger = project
       "io.circe" %% "circe-core" % circeVersion
     )
   ).dependsOn(core)
+
+lazy val example = project
+  .settings(
+    moduleName := "stork-example",
+    commonSettings,
+    libraryDependencies ++= Seq(
+      "io.circe" %% "circe-generic" % circeVersion,
+      "org.http4s" %% "http4s-circe" % http4sVersion
+    )
+  ).dependsOn(swagger)
 
 lazy val compilerOptions = Seq(
   "-unchecked",

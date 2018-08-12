@@ -1,18 +1,19 @@
-package stork
+package stork.internal
 
 import cats.effect.IO
 import cats.implicits._
 import org.http4s.Request
 import shapeless.{::, HList, HNil}
 import stork.schema.Schema
+import stork.{ExtractState, Route}
 
-trait Joiner[T1, T2] {
+sealed trait Joiner[T1, T2] {
   type Out
 
   def join(t1: T1, t2: T2): Out
 }
 
-trait LowPrioJoiner {
+private[stork] trait LowPrioJoiner {
   implicit def hnilJoiner[A <: HList]: Joiner.Aux[Route[IO, HNil], Route[IO, A], Route[IO, A]] =
     new Joiner[Route[IO, HNil], Route[IO, A]] {
       override type Out = Route[IO, A]
